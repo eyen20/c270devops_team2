@@ -1,52 +1,55 @@
-from flask import Flask, render_template, request, redirect
-import sqlite3
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+import urllib.parse
 
-app = Flask(__name__)
+PORT = 8000
 
-def init_db():
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            amount REAL
-        )
-    """)
-    conn.commit()
-    conn.close()
+def load_expenses():
+    with open("expenses.json", "r") as f:
+        return json.load(f)
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
+def save_expenses(expenses):
+    with open("expenses.json", "w") as f:
+        json.dump(expenses, f)
 
-    if request.method == "POST":
-        title = request.form["title"]
-        amount = request.form["amount"]
-        cursor.execute(
-            "INSERT INTO expenses (title, amount) VALUES (?, ?)",
-            (title, amount)
-        )
-        conn.commit()
-        return redirect("/")
+class ExpenseHandler(BaseHTTPRequestHandler):
 
-    cursor.execute("SELECT * FROM expenses")
-    expenses = cursor.fetchall()
-    total = sum(expense[2] for expense in expenses)
+    def do_GET(self):
+        if self.path == "/":
+            expenses = load_expenses()
 
-    conn.close()
-    return render_template("index.html", expenses=expenses, total=total)
+            expense_html = "<ul>"
+            for e in expenses:
+                expense_html += f"<li>{e['title']} - ${e['amount']}</li>"
+            expense_html += "</ul>"
 
-@app.route("/delete/<int:id>")
-def delete(id):
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id = ?", (id,))
-    conn.commit()
-    conn.close()
-    return redirect("/")
+            with open("index.html") as f:
+                html = f.read().replace("{{expenses}}", expense_html)
+
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode())
+
+    def do_POST(self):
+        length = int(self.headers['Content-Length'])
+        data = self.rfile.read(length).decode()
+        form = urllib.parse.parse_qs(data)
+
+        expense = {
+            "title": form["title"][0],
+            "amount": form["amount"][0]
+        }
+
+        expenses = load_expenses()
+        expenses.append(expense)
+        save_expenses(expenses)
+
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.end_headers()
 
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True)
+    server = HTTPServer(("localhost", PORT), ExpenseHandler)
+    print(f"Server running at http://localhost:{PORT}")
+    server.serve_forever()
